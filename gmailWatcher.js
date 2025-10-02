@@ -35,19 +35,31 @@ async function getRecentMessages(tokens, maxResults = 10) {
     const auth = createAuthClient(tokens);
     const gmail = google.gmail({ version: 'v1', auth });
 
+    // Получаем последние сообщения с label UNREAD
     const res = await gmail.users.messages.list({
       userId: 'me',
       maxResults,
-      labelIds: ['INBOX'],
-      q: 'is:unread' // Только непрочитанные
+      labelIds: ['INBOX', 'UNREAD']
     });
 
-    return res.data.messages || [];
+    if (!res.data.messages) {
+      return [];
+    }
+
+    return res.data.messages;
+    
   } catch (error) {
-    console.error('❌ Ошибка получения сообщений:', error);
+    console.error('❌ Ошибка получения сообщений:', error.message);
+    
+    // Если ошибка 403 - scope недостаточен
+    if (error.code === 403) {
+      console.error('⚠️  Недостаточно прав! Нужен scope: gmail.readonly');
+    }
+    
     return [];
   }
 }
+
 
 async function getMessage(tokens, messageId) {
   try {
