@@ -54,6 +54,7 @@ bot.onText(/\/status/, async (msg) => {
     }
 
     message += `\n⏱ Проверка: каждые 30 сек\n`;
+    message += `📬 Проверяется последних 20 писем\n`;
     message += `✅ Бот активен`;
 
     bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
@@ -80,11 +81,17 @@ bot.onText(/\/test/, async (msg) => {
     }
 
     let found = 0;
+    let totalMessages = 0;
 
     for (const account of accounts) {
       console.log(`[TEST] Проверка ${account.email}`);
-      const messages = await getRecentMessages(account.tokens, 5);
-      console.log(`[TEST] Найдено писем: ${messages.length}`);
+      const messages = await getRecentMessages(account.tokens, 20);
+      totalMessages += messages ? messages.length : 0;
+      console.log(`[TEST] Найдено писем: ${messages ? messages.length : 0}`);
+
+      if (!messages || messages.length === 0) {
+        continue;
+      }
 
       for (const msg of messages) {
         const fullMessage = await getMessage(account.tokens, msg.id);
@@ -92,8 +99,11 @@ bot.onText(/\/test/, async (msg) => {
 
         if (codes.length > 0) {
           found++;
-          let botMessage = `🔑 *Найден код!*\n\n`;
-          botMessage += `📧 От: \`${from}\`\n`;
+
+          // ДОБАВЛЕНО: Показываем с какой почты код
+          let botMessage = `🔑 *Новый код!*\n\n`;
+          botMessage += `📧 Gmail: \`${account.email}\`\n`;
+          botMessage += `📨 От: \`${from}\`\n`;
           botMessage += `📝 Тема: ${subject}\n\n`;
           botMessage += `*Коды:* ${codes.map(c => '`' + c + '`').join(', ')}`;
 
@@ -103,9 +113,9 @@ bot.onText(/\/test/, async (msg) => {
     }
 
     await bot.editMessageText(
-      found > 0 
-        ? `✅ Найдено кодов: ${found}` 
-        : '📭 Непрочитанных писем с кодами не найдено',
+      `✅ Проверка завершена\n\n` +
+      `📬 Проверено писем: ${totalMessages}\n` +
+      `🔑 Найдено кодов: ${found}`,
       {
         chat_id: chatId,
         message_id: testMsg.message_id
@@ -366,66 +376,117 @@ app.get('/', (req, res) => {
   res.send('✅ Telegram Gmail Bot is running!');
 });
 
-// Проверка почты с подробным логированием
+// УЛУЧШЕННАЯ проверка почты с подробным логированием
 async function emailChecker() {
   try {
-    console.log('\n🔄 [EmailChecker] Начало проверки почты...');
+    console.log('\n🔄 [EmailChecker] ========== Начало проверки ==========');
+    console.log(`⏰ [EmailChecker] Время: ${new Date().toLocaleString('ru-RU')}`);
+
     const users = await getAllUsers();
     console.log(`👥 [EmailChecker] Найдено пользователей: ${users.length}`);
 
+    if (users.length === 0) {
+      console.log('⚠️  [EmailChecker] Нет пользователей для проверки');
+      return;
+    }
+
     for (const user of users) {
-      console.log(`\n👤 [EmailChecker] Проверка для Telegram ID: ${user.telegramId}`);
-      console.log(`📧 [EmailChecker] Аккаунтов у пользователя: ${user.gmailAccounts.length}`);
+      console.log(`\n👤 [EmailChecker] ===== Пользователь ID: ${user.telegramId} =====`);
+      console.log(`📧 [EmailChecker] Аккаунтов Gmail: ${user.gmailAccounts.length}`);
+
+      if (user.gmailAccounts.length === 0) {
+        console.log('⚠️  [EmailChecker] У пользователя нет подключенных аккаунтов');
+        continue;
+      }
 
       for (const account of user.gmailAccounts) {
         try {
-          console.log(`\n📬 [EmailChecker] Проверка почты: ${account.email}`);
-          const messages = await getRecentMessages(account.tokens, 10);
-          console.log(`📩 [EmailChecker] Найдено непрочитанных писем: ${messages ? messages.length : 0}`);
+          console.log(`\n📬 [EmailChecker] ----- Проверка: ${account.email} -----`);
 
-          if (!messages || messages.length === 0) {
-            console.log(`✅ [EmailChecker] Нет новых писем для ${account.email}`);
+          // УЛУЧШЕНО: Проверяем больше писем (20 вместо 10)
+          const messages = await getRecentMessages(account.tokens, 20);
+
+          if (!messages) {
+            console.log(`⚠️  [EmailChecker] Не удалось получить письма для ${account.email}`);
             continue;
           }
 
+          console.log(`📩 [EmailChecker] Найдено непрочитанных: ${messages.length}`);
+
+          if (messages.length === 0) {
+            console.log(`✅ [EmailChecker] Нет новых писем`);
+            continue;
+          }
+
+          let codesFound = 0;
+
           for (const msg of messages) {
-            console.log(`\n📧 [EmailChecker] Обработка письма ID: ${msg.id}`);
+            try {
+              console.log(`\n  📧 [EmailChecker] Письмо ID: ${msg.id}`);
 
-            const fullMessage = await getMessage(account.tokens, msg.id);
-            const { codes, subject, from } = extractVerificationCode(fullMessage);
+              const fullMessage = await getMessage(account.tokens, msg.id);
 
-            console.log(`🔍 [EmailChecker] Тема: ${subject}`);
-            console.log(`🔍 [EmailChecker] От: ${from}`);
-            console.log(`🔍 [EmailChecker] Найдено кодов: ${codes.length}`);
+              if (!fullMessage) {
+                console.log(`  ⚠️  [EmailChecker] Не удалось получить содержимое письма`);
+                continue;
+              }
 
-            if (codes.length > 0) {
-              console.log(`🔑 [EmailChecker] Коды: ${codes.join(', ')}`);
+              const { codes, subject, from } = extractVerificationCode(fullMessage);
 
-              let botMessage = `🔑 *Новый код верификации!*\n\n`;
-              botMessage += `📧 От: \`${from}\`\n`;
-              botMessage += `📝 Тема: ${subject}\n\n`;
-              botMessage += `*Коды:* ${codes.map(c => '`' + c + '`').join(', ')}`;
+              console.log(`  📝 [EmailChecker] Тема: "${subject}"`);
+              console.log(`  📨 [EmailChecker] От: "${from}"`);
+              console.log(`  🔍 [EmailChecker] Найдено кодов: ${codes.length}`);
 
-              await bot.sendMessage(user.telegramId, botMessage, { parse_mode: 'Markdown' });
-              console.log(`✅ [EmailChecker] Код отправлен пользователю ${user.telegramId}`);
+              if (codes.length > 0) {
+                codesFound++;
+                console.log(`  🔑 [EmailChecker] Коды: [${codes.join(', ')}]`);
 
-              await markAsRead(account.tokens, msg.id);
-              console.log(`✅ [EmailChecker] Письмо ${msg.id} помечено как прочитанное`);
-            } else {
-              console.log(`⚠️  [EmailChecker] Коды не найдены в письме "${subject}"`);
+                // УЛУЧШЕНО: Показываем с какой почты пришел код
+                let botMessage = `🔑 *Новый код верификации!*\n\n`;
+                botMessage += `📧 Gmail: \`${account.email}\`\n`;
+                botMessage += `📨 От: \`${from}\`\n`;
+                botMessage += `📝 Тема: ${subject}\n\n`;
+                botMessage += `*Коды:* ${codes.map(c => '`' + c + '`').join(', ')}`;
+
+                await bot.sendMessage(user.telegramId, botMessage, { parse_mode: 'Markdown' });
+                console.log(`  ✅ [EmailChecker] Код отправлен пользователю ${user.telegramId}`);
+
+                // Помечаем как прочитанное
+                await markAsRead(account.tokens, msg.id);
+                console.log(`  ✅ [EmailChecker] Письмо помечено как прочитанное`);
+              } else {
+                console.log(`  ⚠️  [EmailChecker] Коды не найдены`);
+              }
+
+            } catch (msgError) {
+              console.error(`  ❌ [EmailChecker] Ошибка обработки письма ${msg.id}:`, msgError.message);
             }
           }
 
-        } catch (err) {
-          console.error(`❌ [EmailChecker] Ошибка проверки ${account.email}:`, err.message);
+          console.log(`\n📊 [EmailChecker] Итого для ${account.email}:`);
+          console.log(`   - Проверено писем: ${messages.length}`);
+          console.log(`   - Найдено кодов: ${codesFound}`);
+
+        } catch (accError) {
+          console.error(`❌ [EmailChecker] Ошибка проверки ${account.email}:`, accError.message);
+
+          // Дополнительная информация об ошибке
+          if (accError.code === 401) {
+            console.error(`⚠️  [EmailChecker] Токен истек для ${account.email} - требуется переподключение`);
+          } else if (accError.code === 403) {
+            console.error(`⚠️  [EmailChecker] Недостаточно прав для ${account.email}`);
+          } else if (accError.code === 429) {
+            console.error(`⚠️  [EmailChecker] Rate limit для ${account.email} - слишком много запросов`);
+          }
         }
       }
     }
 
-    console.log(`\n✅ [EmailChecker] Проверка завершена\n`);
+    console.log(`\n✅ [EmailChecker] ========== Проверка завершена ==========\n`);
 
   } catch (error) {
     console.error('❌ [EmailChecker] Критическая ошибка:', error);
+    console.error('Stack trace:', error.stack);
   }
 }
 
@@ -441,12 +502,14 @@ async function start() {
     });
 
     // ВАЖНО: Запуск проверки почты
+    console.log('\n⏰ [Startup] Настройка автоматической проверки почты...');
     setInterval(emailChecker, 30000); // Каждые 30 секунд
     setTimeout(emailChecker, 10000);  // Первая проверка через 10 секунд
+    console.log('✅ [Startup] Проверка почты будет выполняться каждые 30 секунд');
 
     console.log('\n✅ Telegram бот запущен!');
     console.log('✅ Режим: Автоматический OAuth (для самых ленивых)');
-    console.log('✅ Проверка почты: каждые 30 секунд\n');
+    console.log('✅ Проверка: 20 последних писем каждые 30 сек\n');
 
   } catch (error) {
     console.error('❌ Ошибка запуска:', error);
