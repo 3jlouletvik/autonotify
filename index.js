@@ -34,6 +34,93 @@ bot.onText(/\/start/, (msg) => {
   );
 });
 
+// /status
+bot.onText(/\/status/, async (msg) => {
+  const chatId = msg.chat.id;
+
+  try {
+    const accounts = await getUserAccounts(chatId);
+
+    let message = '*📊 Статус бота*\n\n';
+    message += `👤 Telegram ID: \`${chatId}\`\n`;
+    message += `📧 Подключено аккаунтов: ${accounts.length}\n\n`;
+
+    if (accounts.length > 0) {
+      message += '*Аккаунты:*\n';
+      for (const acc of accounts) {
+        const date = new Date(acc.addedAt).toLocaleDateString('ru-RU');
+        message += `• \`${acc.email}\`\n  Добавлен: ${date}\n`;
+      }
+    }
+
+    message += `\n⏱ Проверка: каждые 30 сек\n`;
+    message += `✅ Бот активен`;
+
+    bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+  } catch (error) {
+    bot.sendMessage(chatId, '❌ Ошибка получения статуса');
+    console.error(error);
+  }
+});
+
+// /test - ручная проверка почты
+bot.onText(/\/test/, async (msg) => {
+  const chatId = msg.chat.id;
+  const testMsg = await bot.sendMessage(chatId, '⏳ Проверяю почту вручную...');
+
+  try {
+    const accounts = await getUserAccounts(chatId);
+
+    if (accounts.length === 0) {
+      await bot.editMessageText('❌ Нет подключенных аккаунтов', {
+        chat_id: chatId,
+        message_id: testMsg.message_id
+      });
+      return;
+    }
+
+    let found = 0;
+
+    for (const account of accounts) {
+      console.log(`[TEST] Проверка ${account.email}`);
+      const messages = await getRecentMessages(account.tokens, 5);
+      console.log(`[TEST] Найдено писем: ${messages.length}`);
+
+      for (const msg of messages) {
+        const fullMessage = await getMessage(account.tokens, msg.id);
+        const { codes, subject, from } = extractVerificationCode(fullMessage);
+
+        if (codes.length > 0) {
+          found++;
+          let botMessage = `🔑 *Найден код!*\n\n`;
+          botMessage += `📧 От: \`${from}\`\n`;
+          botMessage += `📝 Тема: ${subject}\n\n`;
+          botMessage += `*Коды:* ${codes.map(c => '`' + c + '`').join(', ')}`;
+
+          await bot.sendMessage(chatId, botMessage, { parse_mode: 'Markdown' });
+        }
+      }
+    }
+
+    await bot.editMessageText(
+      found > 0 
+        ? `✅ Найдено кодов: ${found}` 
+        : '📭 Непрочитанных писем с кодами не найдено',
+      {
+        chat_id: chatId,
+        message_id: testMsg.message_id
+      }
+    );
+
+  } catch (error) {
+    await bot.editMessageText(`❌ Ошибка: ${error.message}`, {
+      chat_id: chatId,
+      message_id: testMsg.message_id
+    });
+    console.error(error);
+  }
+});
+
 // Обработка кнопок
 bot.on('callback_query', async (query) => {
   const chatId = query.message.chat.id;
@@ -43,11 +130,9 @@ bot.on('callback_query', async (query) => {
     bot.answerCallbackQuery(query.id);
 
     try {
-      // Генерируем уникальный state для идентификации пользователя
       const state = chatId.toString();
       await setPendingAuth(chatId, state);
 
-      // Получаем OAuth URL
       const authUrl = getAuthUrl(state);
 
       bot.sendMessage(chatId,
@@ -175,10 +260,10 @@ bot.on('callback_query', async (query) => {
   }
 });
 
-// OAuth callback - сюда приходит пользователь после авторизации в Google
+// OAuth callback
 app.get('/oauth/callback', async (req, res) => {
   const code = req.query.code;
-  const state = req.query.state; // Telegram ID
+  const state = req.query.state;
   const error = req.query.error;
 
   if (error) {
@@ -192,7 +277,6 @@ app.get('/oauth/callback', async (req, res) => {
   }
 
   try {
-    // Находим пользователя по state
     const user = await findUserByState(state);
     if (!user) {
       res.send('<h1>❌ Ошибка</h1><p>Пользователь не найден. Попробуй начать заново в боте.</p>');
@@ -200,20 +284,12 @@ app.get('/oauth/callback', async (req, res) => {
     }
 
     const telegramId = user.telegramId;
-
-    // Получаем токены из кода
     const tokens = await getTokensFromCode(code);
-
-    // Получаем email адрес
     const email = await getEmailAddress(tokens);
-
-    // Получаем начальный historyId
     const historyId = await startWatching(tokens);
 
-    // Сохраняем в базу
     await saveUserTokens(telegramId, email, tokens, historyId);
 
-    // Уведомляем пользователя в Telegram
     bot.sendMessage(telegramId,
       `✅ *Gmail успешно подключен!*\n\n` +
       `📧 Аккаунт: \`${email}\`\n\n` +
@@ -221,7 +297,6 @@ app.get('/oauth/callback', async (req, res) => {
       { parse_mode: 'Markdown', ...getMainKeyboard() }
     );
 
-    // Показываем красивую страницу успеха
     res.send(`
       <!DOCTYPE html>
       <html>
@@ -258,17 +333,6 @@ app.get('/oauth/callback', async (req, res) => {
             margin: 20px 0;
             word-break: break-all;
           }
-          .close-btn {
-            background: white;
-            color: #667eea;
-            border: none;
-            padding: 15px 40px;
-            border-radius: 25px;
-            font-size: 16px;
-            font-weight: bold;
-            margin-top: 20px;
-            cursor: pointer;
-          }
         </style>
       </head>
       <body>
@@ -278,25 +342,18 @@ app.get('/oauth/callback', async (req, res) => {
           <p>Gmail аккаунт подключен к Telegram боту</p>
           <div class="email">${email}</div>
           <p>Коды верификации будут приходить автоматически</p>
-          <button class="close-btn" onclick="window.close()">Закрыть окно</button>
+          <p style="margin-top: 30px; font-size: 14px;">Можешь закрыть это окно</p>
         </div>
         <script>
-          // Автоматически закрываем окно через 5 секунд
-          setTimeout(() => {
-            window.close();
-          }, 5000);
+          setTimeout(() => { window.close(); }, 5000);
         </script>
       </body>
       </html>
     `);
 
   } catch (error) {
-    console.error('❌ Ошибка OAuth callback:', error);
-    res.send(`
-      <h1>❌ Ошибка</h1>
-      <p>${error.message}</p>
-      <p>Попробуй снова в боте.</p>
-    `);
+    console.error('❌ OAuth callback error:', error);
+    res.send(`<h1>❌ Ошибка</h1><p>${error.message}</p><p>Попробуй снова в боте.</p>`);
   }
 });
 
@@ -309,40 +366,66 @@ app.get('/', (req, res) => {
   res.send('✅ Telegram Gmail Bot is running!');
 });
 
-// Проверка почты каждые 30 секунд
+// Проверка почты с подробным логированием
 async function emailChecker() {
   try {
+    console.log('\n🔄 [EmailChecker] Начало проверки почты...');
     const users = await getAllUsers();
+    console.log(`👥 [EmailChecker] Найдено пользователей: ${users.length}`);
 
     for (const user of users) {
+      console.log(`\n👤 [EmailChecker] Проверка для Telegram ID: ${user.telegramId}`);
+      console.log(`📧 [EmailChecker] Аккаунтов у пользователя: ${user.gmailAccounts.length}`);
+
       for (const account of user.gmailAccounts) {
         try {
-          const messages = await getRecentMessages(account.tokens, 5);
+          console.log(`\n📬 [EmailChecker] Проверка почты: ${account.email}`);
+          const messages = await getRecentMessages(account.tokens, 10);
+          console.log(`📩 [EmailChecker] Найдено непрочитанных писем: ${messages ? messages.length : 0}`);
+
+          if (!messages || messages.length === 0) {
+            console.log(`✅ [EmailChecker] Нет новых писем для ${account.email}`);
+            continue;
+          }
 
           for (const msg of messages) {
+            console.log(`\n📧 [EmailChecker] Обработка письма ID: ${msg.id}`);
+
             const fullMessage = await getMessage(account.tokens, msg.id);
             const { codes, subject, from } = extractVerificationCode(fullMessage);
 
+            console.log(`🔍 [EmailChecker] Тема: ${subject}`);
+            console.log(`🔍 [EmailChecker] От: ${from}`);
+            console.log(`🔍 [EmailChecker] Найдено кодов: ${codes.length}`);
+
             if (codes.length > 0) {
+              console.log(`🔑 [EmailChecker] Коды: ${codes.join(', ')}`);
+
               let botMessage = `🔑 *Новый код верификации!*\n\n`;
               botMessage += `📧 От: \`${from}\`\n`;
               botMessage += `📝 Тема: ${subject}\n\n`;
               botMessage += `*Коды:* ${codes.map(c => '`' + c + '`').join(', ')}`;
 
               await bot.sendMessage(user.telegramId, botMessage, { parse_mode: 'Markdown' });
-              console.log(`✅ Код отправлен пользователю ${user.telegramId}`);
+              console.log(`✅ [EmailChecker] Код отправлен пользователю ${user.telegramId}`);
 
               await markAsRead(account.tokens, msg.id);
+              console.log(`✅ [EmailChecker] Письмо ${msg.id} помечено как прочитанное`);
+            } else {
+              console.log(`⚠️  [EmailChecker] Коды не найдены в письме "${subject}"`);
             }
           }
 
         } catch (err) {
-          console.error(`❌ Ошибка проверки ${account.email}:`, err.message);
+          console.error(`❌ [EmailChecker] Ошибка проверки ${account.email}:`, err.message);
         }
       }
     }
+
+    console.log(`\n✅ [EmailChecker] Проверка завершена\n`);
+
   } catch (error) {
-    console.error('❌ Ошибка emailChecker:', error);
+    console.error('❌ [EmailChecker] Критическая ошибка:', error);
   }
 }
 
@@ -357,14 +440,13 @@ async function start() {
       console.log(`✅ OAuth callback: ${process.env.BOT_URL}/oauth/callback`);
     });
 
-    // Проверка почты каждые 30 секунд
-    setInterval(emailChecker, 30000);
+    // ВАЖНО: Запуск проверки почты
+    setInterval(emailChecker, 30000); // Каждые 30 секунд
+    setTimeout(emailChecker, 10000);  // Первая проверка через 10 секунд
 
     console.log('\n✅ Telegram бот запущен!');
     console.log('✅ Режим: Автоматический OAuth (для самых ленивых)');
     console.log('✅ Проверка почты: каждые 30 секунд\n');
-
-    setTimeout(emailChecker, 10000);
 
   } catch (error) {
     console.error('❌ Ошибка запуска:', error);
@@ -374,6 +456,7 @@ async function start() {
 
 start();
 
+// Обработка ошибок
 process.on('unhandledRejection', (error) => {
   console.error('❌ Unhandled rejection:', error);
 });
